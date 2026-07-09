@@ -17,7 +17,7 @@ env:
   # NODE_EXTRA_CA_CERTS: /usr/local/share/ca-certificates/ZscalerRootCertificate-2048-SHA256.crt
   AWS_REGION: us-east-1
   SNS_TOPIC_NAME: testing
-  CODEQL_FINDINGS_BUCKET: your-s3-bucket-name
+  CODEQL_FINDINGS_BUCKET: codeql-scan-result-vulns
   CODEQL_FINDINGS_PREFIX: codeql-findings
 
 jobs:
