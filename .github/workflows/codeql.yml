@@ -20,7 +20,7 @@ env:
 jobs:
   analyze:
     name: Analyze
-    runs-on: [self-hosted, dea-dccc-preprod]
+    runs-on: [self-hosted, Linux]
 
     strategy:
       fail-fast: false
