@@ -7,6 +7,7 @@ on:
     branches: [main]
   workflow_dispatch:
   
+
 permissions:
   contents: read
   security-events: write
@@ -253,7 +254,94 @@ jobs:
             --sse AES256
 
           echo "CodeQL findings synced to $RUN_PREFIX/"
-            
+  notify:
+    name: Notify
+    needs: analyze
+    runs-on: [self-hosted, Linux]
+
+    steps:
+      - name: Wait for all code scanning alerts to settle
+        shell: bash
+        run: sleep 30
+
+      - name: Find High and Critical CodeQL alerts for notification
+        id: codeql-alerts
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const { owner, repo } = context.repo;
+            const currentRef = context.ref;
+            const severities = new Set(['high', 'critical']);
+
+            const alerts = await github.paginate(
+              github.rest.codeScanning.listAlertsForRepo,
+              {
+                owner,
+                repo,
+                state: 'open',
+                tool_name: 'CodeQL',
+                ref: currentRef,
+                per_page: 100
+              }
+            );
+
+            const highCriticalAlerts = alerts.filter((alert) => {
+              const securitySeverity = alert.rule?.security_severity_level?.toLowerCase();
+              return severities.has(securitySeverity);
+            });
+
+            const repositoryUrl = `${context.serverUrl}/${owner}/${repo}`;
+            const runUrl = `${repositoryUrl}/actions/runs/${context.runId}`;
+            const generatedAt = new Date().toISOString();
+
+            const lines = [];
+
+            lines.push('CODEQL SECURITY ALERT');
+            lines.push('');
+            lines.push('========================================');
+            lines.push('');
+            lines.push(`Repository : ${owner}/${repo}`);
+            lines.push(`Ref        : ${currentRef}`);
+            lines.push(`Commit     : ${context.sha}`);
+            lines.push(`Workflow   : ${runUrl}`);
+            lines.push(`Generated  : ${generatedAt}`);
+            lines.push(`Total High/Critical Alerts: ${highCriticalAlerts.length}`);
+            lines.push('');
+            lines.push('========================================');
+            lines.push('');
+            lines.push('HIGH / CRITICAL ALERT DETAILS');
+            lines.push('');
+
+            highCriticalAlerts.slice(0, 25).forEach((alert, index) => {
+              const severity = alert.rule?.security_severity_level?.toUpperCase() || 'UNKNOWN';
+              const title = alert.rule?.description || alert.rule?.name || 'Unknown CodeQL alert';
+              const location = alert.most_recent_instance?.location;
+              const filePath = location?.path || 'Unknown file';
+              const startLine = location?.start_line || 'unknown line';
+
+              lines.push(`${index + 1}. [${severity}] ${title}`);
+              lines.push(`   File     : ${filePath}`);
+              lines.push(`   Line     : ${startLine}`);
+              lines.push(`   Alert URL: ${alert.html_url}`);
+              lines.push('');
+            });
+
+            if (highCriticalAlerts.length > 25) {
+              lines.push('NOTE: Only the first 25 alerts are listed.');
+              lines.push('Please review the full list in GitHub Code Scanning.');
+              lines.push('');
+            }
+
+            lines.push('========================================');
+            lines.push('');
+            lines.push('Action Required:');
+            lines.push('Please review and fix the above CodeQL security alerts.');
+            lines.push('');
+
+            fs.writeFileSync('codeql-alert-message.txt', lines.join('\n'));
+            core.setOutput('count', String(highCriticalAlerts.length));
+
       - name: Publish High and Critical CodeQL alerts to SNS
         if: steps.codeql-alerts.outputs.count != '0'
         shell: bash
