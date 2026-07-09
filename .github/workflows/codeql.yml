@@ -98,36 +98,51 @@ jobs:
             const repositoryUrl = `${context.serverUrl}/${owner}/${repo}`;
             const runUrl = `${repositoryUrl}/actions/runs/${context.runId}`;
 
-            const lines = [
-              `High or Critical CodeQL alerts were found in ${owner}/${repo}.`,
-              '',
-              `Workflow run: ${runUrl}`,
-              `Ref: ${currentRef}`,
-              `Total High/Critical open alerts: ${matchingAlerts.length}`,
-              ''
-            ];
+            const lines = [];
 
-            for (const alert of matchingAlerts.slice(0, 25)) {
-              const severity = alert.rule.security_severity_level.toUpperCase();
+            lines.push('CODEQL SECURITY ALERT');
+            lines.push('');
+            lines.push('========================================');
+            lines.push('');
+            lines.push(`Repository : ${owner}/${repo}`);
+            lines.push(`Ref        : ${currentRef}`);
+            lines.push(`Workflow   : ${runUrl}`);
+            lines.push(`Total High/Critical Alerts: ${matchingAlerts.length}`);
+            lines.push('');
+            lines.push('========================================');
+            lines.push('');
+            lines.push('ALERT DETAILS');
+            lines.push('');
+
+            matchingAlerts.slice(0, 25).forEach((alert, index) => {
+              const severity = alert.rule?.security_severity_level?.toUpperCase() || 'UNKNOWN';
+              const title = alert.rule?.description || alert.rule?.name || 'Unknown CodeQL alert';
               const location = alert.most_recent_instance?.location;
               const filePath = location?.path || 'Unknown file';
               const startLine = location?.start_line || 'unknown line';
 
-              lines.push(
-                `- [${severity}] ${alert.rule.description || alert.rule.name}`,
-                `  Alert: ${alert.html_url}`,
-                `  Location: ${filePath}:${startLine}`,
-                ''
-              );
-            }
+              lines.push(`${index + 1}. [${severity}] ${title}`);
+              lines.push(`   File     : ${filePath}`);
+              lines.push(`   Line     : ${startLine}`);
+              lines.push(`   Alert URL: ${alert.html_url}`);
+              lines.push('');
+            });
 
             if (matchingAlerts.length > 25) {
-              lines.push(`Only the first 25 alerts are listed. Review the full list in GitHub code scanning.`);
+              lines.push('NOTE: Only the first 25 alerts are listed.');
+              lines.push('Please review the full list in GitHub Code Scanning.');
+              lines.push('');
             }
+
+            lines.push('========================================');
+            lines.push('');
+            lines.push('Action Required:');
+            lines.push('Please review and fix the above CodeQL security alerts.');
+            lines.push('');
 
             fs.writeFileSync('codeql-alert-message.txt', lines.join('\n'));
             core.setOutput('count', String(matchingAlerts.length));
-
+            
       - name: Publish High and Critical CodeQL alerts to SNS
         if: steps.codeql-alerts.outputs.count != '0'
         shell: bash
@@ -153,5 +168,5 @@ jobs:
           aws sns publish \
             --region "$AWS_REGION" \
             --topic-arn "$TOPIC_ARN" \
-            --subject "CodeQL High/Critical alert: $GITHUB_REPOSITORY ($ALERT_COUNT)" \
+            --subject "🚨 CodeQL Security Alert | $GITHUB_REPOSITORY | $ALERT_COUNT High/Critical" \
             --message file://codeql-alert-message.txt
