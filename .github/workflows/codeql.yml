@@ -13,7 +13,7 @@ permissions:
   actions: read
 
 env:
-  NODE_EXTRA_CA_CERTS: /usr/local/share/ca-certificates/ZscalerRootCertificate-2048-SHA256.crt
+  # NODE_EXTRA_CA_CERTS: /usr/local/share/ca-certificates/ZscalerRootCertificate-2048-SHA256.crt
   AWS_REGION: us-east-1
   SNS_TOPIC_NAME: testing
 
