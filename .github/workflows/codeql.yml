@@ -12,19 +12,49 @@ permissions:
   security-events: write
   actions: read
 
+env:
+  NODE_EXTRA_CA_CERTS: /usr/local/share/ca-certificates/ZscalerRootCertificate-2048-SHA256.crt
+  AWS_REGION: us-east-1
+  SNS_TOPIC_NAME: testing
+
 jobs:
   analyze:
     name: Analyze
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, dea-dccc-preprod]
 
     strategy:
       fail-fast: false
       matrix:
-        language: [javascript-typescript]
+        language: [python]
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Configure Python 3.9 for CodeQL
+        shell: bash
+        run: |
+          echo "Checking available Python versions..."
+          python3 --version || true
+          python3.9 --version || true
+          which python3 || true
+          which python3.9 || true
+
+          echo "Creating temporary python/python3 symlinks for this workflow..."
+          mkdir -p "$RUNNER_TEMP/python-bin"
+
+          ln -sf /bin/python3.9 "$RUNNER_TEMP/python-bin/python"
+          ln -sf /bin/python3.9 "$RUNNER_TEMP/python-bin/python3"
+
+          echo "$RUNNER_TEMP/python-bin" >> "$GITHUB_PATH"
+
+      - name: Verify Python used by workflow
+        shell: bash
+        run: |
+          which python
+          python --version
+          which python3
+          python3 --version
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
@@ -33,3 +63,95 @@ jobs:
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
+
+      - name: Wait for code scanning alerts to update
+        shell: bash
+        run: sleep 30
+
+      - name: Find High and Critical CodeQL alerts
+        id: codeql-alerts
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const { owner, repo } = context.repo;
+            const currentRef = context.ref;
+            const severities = new Set(['high', 'critical']);
+
+            const alerts = await github.paginate(
+              github.rest.codeScanning.listAlertsForRepo,
+              {
+                owner,
+                repo,
+                state: 'open',
+                tool_name: 'CodeQL',
+                ref: currentRef,
+                per_page: 100
+              }
+            );
+
+            const matchingAlerts = alerts.filter((alert) => {
+              const securitySeverity = alert.rule?.security_severity_level?.toLowerCase();
+              return severities.has(securitySeverity);
+            });
+
+            const repositoryUrl = `${context.serverUrl}/${owner}/${repo}`;
+            const runUrl = `${repositoryUrl}/actions/runs/${context.runId}`;
+
+            const lines = [
+              `High or Critical CodeQL alerts were found in ${owner}/${repo}.`,
+              '',
+              `Workflow run: ${runUrl}`,
+              `Ref: ${currentRef}`,
+              `Total High/Critical open alerts: ${matchingAlerts.length}`,
+              ''
+            ];
+
+            for (const alert of matchingAlerts.slice(0, 25)) {
+              const severity = alert.rule.security_severity_level.toUpperCase();
+              const location = alert.most_recent_instance?.location;
+              const filePath = location?.path || 'Unknown file';
+              const startLine = location?.start_line || 'unknown line';
+
+              lines.push(
+                `- [${severity}] ${alert.rule.description || alert.rule.name}`,
+                `  Alert: ${alert.html_url}`,
+                `  Location: ${filePath}:${startLine}`,
+                ''
+              );
+            }
+
+            if (matchingAlerts.length > 25) {
+              lines.push(`Only the first 25 alerts are listed. Review the full list in GitHub code scanning.`);
+            }
+
+            fs.writeFileSync('codeql-alert-message.txt', lines.join('\n'));
+            core.setOutput('count', String(matchingAlerts.length));
+
+      - name: Publish High and Critical CodeQL alerts to SNS
+        if: steps.codeql-alerts.outputs.count != '0'
+        shell: bash
+        env:
+          ALERT_COUNT: ${{ steps.codeql-alerts.outputs.count }}
+        run: |
+          set -euo pipefail
+
+          echo "Finding SNS topic ARN for topic name: $SNS_TOPIC_NAME"
+
+          TOPIC_ARN=$(aws sns list-topics \
+            --region "$AWS_REGION" \
+            --query "Topics[?ends_with(TopicArn, ':${SNS_TOPIC_NAME}')].TopicArn | [0]" \
+            --output text)
+
+          if [ -z "$TOPIC_ARN" ] || [ "$TOPIC_ARN" = "None" ]; then
+            echo "SNS topic not found: $SNS_TOPIC_NAME"
+            exit 1
+          fi
+
+          echo "Publishing CodeQL alert notification to SNS topic: $TOPIC_ARN"
+
+          aws sns publish \
+            --region "$AWS_REGION" \
+            --topic-arn "$TOPIC_ARN" \
+            --subject "CodeQL High/Critical alert: $GITHUB_REPOSITORY ($ALERT_COUNT)" \
+            --message file://codeql-alert-message.txt
