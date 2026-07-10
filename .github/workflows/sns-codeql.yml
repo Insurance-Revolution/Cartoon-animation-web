@@ -1,0 +1,378 @@
+name: CodeQL
+
+on:
+  push:
+    branches:
+      - main
+      - uat
+      - dev
+
+  pull_request:
+    branches:
+      - main
+      - uat
+      - dev
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+env:
+  # NODE_EXTRA_CA_CERTS: /usr/local/share/ca-certificates/ZscalerRootCertificate-2048-SHA256.crt
+  AWS_REGION: us-east-1
+  SNS_TOPIC_NAME: testing
+  CODEQL_FINDINGS_BUCKET: codeql-scan-result-vulns
+  CODEQL_FINDINGS_PREFIX: codeql-findings
+
+jobs:
+  analyze:
+    name: Analyze
+    runs-on: [self-hosted, Linux]
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure Python 3.9 for CodeQL
+        shell: bash
+        run: |
+          echo "Checking available Python versions..."
+          python3 --version || true
+          python3.9 --version || true
+          which python3 || true
+          which python3.9 || true
+
+          echo "Creating temporary python/python3 symlinks for this workflow..."
+          mkdir -p "$RUNNER_TEMP/python-bin"
+
+          ln -sf /bin/python3.9 "$RUNNER_TEMP/python-bin/python"
+          ln -sf /bin/python3.9 "$RUNNER_TEMP/python-bin/python3"
+
+          echo "$RUNNER_TEMP/python-bin" >> "$GITHUB_PATH"
+
+      - name: Verify Python used by workflow
+        shell: bash
+        run: |
+          which python
+          python --version
+          which python3
+          python3 --version
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+
+      - name: Perform CodeQL Analysis
+        id: analyze
+        uses: github/codeql-action/analyze@v3
+        with:
+          output: codeql-results
+          upload: always
+
+      - name: Wait for code scanning alerts to update
+        shell: bash
+        run: sleep 30
+
+      - name: Export CodeQL alerts
+        id: codeql-alerts
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const { owner, repo } = context.repo;
+            const currentRef = context.ref;
+            const severities = new Set(['high', 'critical']);
+
+            const alerts = await github.paginate(
+              github.rest.codeScanning.listAlertsForRepo,
+              {
+                owner,
+                repo,
+                state: 'open',
+                tool_name: 'CodeQL',
+                ref: currentRef,
+                per_page: 100
+              }
+            );
+
+            const highCriticalAlerts = alerts.filter((alert) => {
+              const securitySeverity = alert.rule?.security_severity_level?.toLowerCase();
+              return severities.has(securitySeverity);
+            });
+
+            const repositoryUrl = `${context.serverUrl}/${owner}/${repo}`;
+            const runUrl = `${repositoryUrl}/actions/runs/${context.runId}`;
+            const generatedAt = new Date().toISOString();
+
+            const normalizeAlert = (alert) => {
+              const location = alert.most_recent_instance?.location;
+
+              return {
+                number: alert.number,
+                state: alert.state,
+                created_at: alert.created_at,
+                updated_at: alert.updated_at,
+                dismissed_at: alert.dismissed_at,
+                dismissed_reason: alert.dismissed_reason,
+                fixed_at: alert.fixed_at,
+                alert_url: alert.html_url,
+                rule: {
+                  id: alert.rule?.id,
+                  name: alert.rule?.name,
+                  description: alert.rule?.description,
+                  severity: alert.rule?.severity,
+                  security_severity_level: alert.rule?.security_severity_level,
+                  tags: alert.rule?.tags || []
+                },
+                tool: {
+                  name: alert.tool?.name,
+                  version: alert.tool?.version,
+                  guid: alert.tool?.guid
+                },
+                location: {
+                  path: location?.path,
+                  start_line: location?.start_line,
+                  end_line: location?.end_line,
+                  start_column: location?.start_column,
+                  end_column: location?.end_column
+                },
+                most_recent_instance: alert.most_recent_instance
+              };
+            };
+
+            const exportPayload = {
+              repository: `${owner}/${repo}`,
+              ref: currentRef,
+              commit_sha: context.sha,
+              workflow_run_id: String(context.runId),
+              workflow_run_url: runUrl,
+              generated_at: generatedAt,
+              tool: 'CodeQL',
+              total_open_alerts: alerts.length,
+              high_critical_count: highCriticalAlerts.length,
+              alerts: alerts.map(normalizeAlert)
+            };
+
+            const highCriticalPayload = {
+              ...exportPayload,
+              total_open_alerts: highCriticalAlerts.length,
+              alerts: highCriticalAlerts.map(normalizeAlert)
+            };
+
+            fs.writeFileSync('codeql-alerts.json', JSON.stringify(exportPayload, null, 2));
+            fs.writeFileSync('codeql-high-critical-alerts.json', JSON.stringify(highCriticalPayload, null, 2));
+
+            const lines = [];
+
+            lines.push('CODEQL FINDINGS SUMMARY');
+            lines.push('');
+            lines.push('========================================');
+            lines.push('');
+            lines.push(`Repository : ${owner}/${repo}`);
+            lines.push(`Ref        : ${currentRef}`);
+            lines.push(`Commit     : ${context.sha}`);
+            lines.push(`Workflow   : ${runUrl}`);
+            lines.push(`Generated  : ${generatedAt}`);
+            lines.push(`Total Open CodeQL Alerts: ${alerts.length}`);
+            lines.push(`Total High/Critical Alerts: ${highCriticalAlerts.length}`);
+            lines.push('');
+            lines.push('========================================');
+            lines.push('');
+            lines.push('HIGH / CRITICAL ALERT DETAILS');
+            lines.push('');
+
+            highCriticalAlerts.slice(0, 25).forEach((alert, index) => {
+              const severity = alert.rule?.security_severity_level?.toUpperCase() || 'UNKNOWN';
+              const title = alert.rule?.description || alert.rule?.name || 'Unknown CodeQL alert';
+              const location = alert.most_recent_instance?.location;
+              const filePath = location?.path || 'Unknown file';
+              const startLine = location?.start_line || 'unknown line';
+
+              lines.push(`${index + 1}. [${severity}] ${title}`);
+              lines.push(`   File     : ${filePath}`);
+              lines.push(`   Line     : ${startLine}`);
+              lines.push(`   Alert URL: ${alert.html_url}`);
+              lines.push('');
+            });
+
+            if (highCriticalAlerts.length > 25) {
+              lines.push('NOTE: Only the first 25 alerts are listed.');
+              lines.push('Please review the full list in GitHub Code Scanning.');
+              lines.push('');
+            }
+
+            lines.push('========================================');
+            lines.push('');
+            lines.push('Action Required:');
+            lines.push('Please review and fix the above CodeQL security alerts.');
+            lines.push('');
+
+            fs.writeFileSync('codeql-alert-message.txt', lines.join('\n'));
+            fs.writeFileSync('codeql-alert-summary.txt', lines.join('\n'));
+            core.setOutput('count', String(highCriticalAlerts.length));
+
+      - name: Sync CodeQL findings to S3
+        shell: bash
+        env:
+          SARIF_OUTPUT_DIR: ${{ steps.analyze.outputs['sarif-output'] }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$CODEQL_FINDINGS_BUCKET" ]; then
+            echo "CODEQL_FINDINGS_BUCKET repository variable is required."
+            exit 1
+          fi
+
+          SAFE_REPOSITORY="${GITHUB_REPOSITORY//\//-}"
+          SAFE_REF="$(printf '%s' "$GITHUB_REF" | tr '/:' '--')"
+          SAFE_LANGUAGE="$(printf '%s' "${{ matrix.language }}" | tr '/:' '--')"
+          RUN_DATE="$(date -u +%F)"
+          RUN_PREFIX="s3://${CODEQL_FINDINGS_BUCKET}/${CODEQL_FINDINGS_PREFIX}/${SAFE_REPOSITORY}/${SAFE_REF}/${SAFE_LANGUAGE}/runs/${RUN_DATE}/${GITHUB_RUN_ID}"
+          LATEST_PREFIX="s3://${CODEQL_FINDINGS_BUCKET}/${CODEQL_FINDINGS_PREFIX}/${SAFE_REPOSITORY}/${SAFE_REF}/${SAFE_LANGUAGE}/latest"
+
+          mkdir -p codeql-s3-archive
+
+          cp codeql-alerts.json codeql-s3-archive/alerts.json
+          cp codeql-high-critical-alerts.json codeql-s3-archive/high-critical-alerts.json
+          cp codeql-alert-summary.txt codeql-s3-archive/summary.txt
+
+          if [ -n "$SARIF_OUTPUT_DIR" ] && [ -d "$SARIF_OUTPUT_DIR" ]; then
+            find "$SARIF_OUTPUT_DIR" -type f \( -name '*.sarif' -o -name '*.sarif.json' \) -exec cp {} codeql-s3-archive/ \;
+          else
+            echo "SARIF output directory was not found: ${SARIF_OUTPUT_DIR:-unset}"
+            exit 1
+          fi
+
+          aws s3 sync codeql-s3-archive/ "$RUN_PREFIX/" \
+            --region "$AWS_REGION" \
+            --sse AES256
+
+          aws s3 sync codeql-s3-archive/ "$LATEST_PREFIX/" \
+            --region "$AWS_REGION" \
+            --sse AES256
+
+          echo "CodeQL findings synced to $RUN_PREFIX/"
+  notify:
+    name: Notify
+    needs: analyze
+    runs-on: [self-hosted, Linux]
+
+    steps:
+      - name: Wait for all code scanning alerts to settle
+        shell: bash
+        run: sleep 30
+
+      - name: Find High and Critical CodeQL alerts for notification
+        id: codeql-alerts
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const { owner, repo } = context.repo;
+            const currentRef = context.ref;
+            const severities = new Set(['high', 'critical']);
+
+            const alerts = await github.paginate(
+              github.rest.codeScanning.listAlertsForRepo,
+              {
+                owner,
+                repo,
+                state: 'open',
+                tool_name: 'CodeQL',
+                ref: currentRef,
+                per_page: 100
+              }
+            );
+
+            const highCriticalAlerts = alerts.filter((alert) => {
+              const securitySeverity = alert.rule?.security_severity_level?.toLowerCase();
+              return severities.has(securitySeverity);
+            });
+
+            const repositoryUrl = `${context.serverUrl}/${owner}/${repo}`;
+            const runUrl = `${repositoryUrl}/actions/runs/${context.runId}`;
+            const generatedAt = new Date().toISOString();
+
+            const lines = [];
+
+            lines.push('CODEQL SECURITY ALERT');
+            lines.push('');
+            lines.push('========================================');
+            lines.push('');
+            lines.push(`Repository : ${owner}/${repo}`);
+            lines.push(`Ref        : ${currentRef}`);
+            lines.push(`Commit     : ${context.sha}`);
+            lines.push(`Workflow   : ${runUrl}`);
+            lines.push(`Generated  : ${generatedAt}`);
+            lines.push(`Total High/Critical Alerts: ${highCriticalAlerts.length}`);
+            lines.push('');
+            lines.push('========================================');
+            lines.push('');
+            lines.push('HIGH / CRITICAL ALERT DETAILS');
+            lines.push('');
+
+            highCriticalAlerts.slice(0, 25).forEach((alert, index) => {
+              const severity = alert.rule?.security_severity_level?.toUpperCase() || 'UNKNOWN';
+              const title = alert.rule?.description || alert.rule?.name || 'Unknown CodeQL alert';
+              const location = alert.most_recent_instance?.location;
+              const filePath = location?.path || 'Unknown file';
+              const startLine = location?.start_line || 'unknown line';
+
+              lines.push(`${index + 1}. [${severity}] ${title}`);
+              lines.push(`   File     : ${filePath}`);
+              lines.push(`   Line     : ${startLine}`);
+              lines.push(`   Alert URL: ${alert.html_url}`);
+              lines.push('');
+            });
+
+            if (highCriticalAlerts.length > 25) {
+              lines.push('NOTE: Only the first 25 alerts are listed.');
+              lines.push('Please review the full list in GitHub Code Scanning.');
+              lines.push('');
+            }
+
+            lines.push('========================================');
+            lines.push('');
+            lines.push('Action Required:');
+            lines.push('Please review and fix the above CodeQL security alerts.');
+            lines.push('');
+
+            fs.writeFileSync('codeql-alert-message.txt', lines.join('\n'));
+            core.setOutput('count', String(highCriticalAlerts.length));
+
+      - name: Publish High and Critical CodeQL alerts to SNS
+        if: steps.codeql-alerts.outputs.count != '0'
+        shell: bash
+        env:
+          ALERT_COUNT: ${{ steps.codeql-alerts.outputs.count }}
+        run: |
+          set -euo pipefail
+
+          echo "Finding SNS topic ARN for topic name: $SNS_TOPIC_NAME"
+
+          TOPIC_ARN=$(aws sns list-topics \
+            --region "$AWS_REGION" \
+            --query "Topics[?ends_with(TopicArn, ':${SNS_TOPIC_NAME}')].TopicArn | [0]" \
+            --output text)
+
+          if [ -z "$TOPIC_ARN" ] || [ "$TOPIC_ARN" = "None" ]; then
+            echo "SNS topic not found: $SNS_TOPIC_NAME"
+            exit 1
+          fi
+
+          echo "Publishing CodeQL alert notification to SNS topic: $TOPIC_ARN"
+
+          aws sns publish \
+            --region "$AWS_REGION" \
+            --topic-arn "$TOPIC_ARN" \
+            --subject "CodeQL Security Alert | $GITHUB_REPOSITORY | $ALERT_COUNT High/Critical" \
+            --message file://codeql-alert-message.txt
