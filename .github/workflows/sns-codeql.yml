@@ -302,8 +302,8 @@ jobs:
 
             const lines = [];
 
-            lines.push('CODEQL SECURITY ALERT');
-            lines.push('=====================');
+            lines.push('🚨 HIGH/CRITICAL SECURITY ALERT 🚨');
+            lines.push('==================================');
             lines.push('');
             lines.push('Action required: high or critical findings are open.');
             lines.push('');
@@ -370,5 +370,5 @@ jobs:
           aws sns publish \
             --region "$AWS_REGION" \
             --topic-arn "$TOPIC_ARN" \
-            --subject "CodeQL Security Alert | $GITHUB_REPOSITORY | $ALERT_COUNT High/Critical" \
+            --subject "🚨 CodeQL High/Critical Alert | $GITHUB_REPOSITORY | $ALERT_COUNT Findings" \
             --message file://codeql-alert-message.txt
