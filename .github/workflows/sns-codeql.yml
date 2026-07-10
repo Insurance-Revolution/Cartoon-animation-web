@@ -112,6 +112,7 @@ jobs:
             const repositoryUrl = `${context.serverUrl}/${owner}/${repo}`;
             const runUrl = `${repositoryUrl}/actions/runs/${context.runId}`;
             const generatedAt = new Date().toISOString();
+            const refName = currentRef.replace(/^refs\/(heads|pull)\//, '');
 
             const normalizeAlert = (alert) => {
               const location = alert.most_recent_instance?.location;
@@ -173,21 +174,19 @@ jobs:
 
             const lines = [];
 
-            lines.push('CODEQL FINDINGS SUMMARY');
+            lines.push('CODEQL SECURITY REPORT');
+            lines.push('======================');
             lines.push('');
-            lines.push('========================================');
+            lines.push(`Repository: ${owner}/${repo}`);
+            lines.push(`Branch/ref: ${refName}`);
+            lines.push(`Commit: ${context.sha.substring(0, 12)}`);
+            lines.push(`Generated: ${generatedAt}`);
+            lines.push(`Open alerts: ${alerts.length}`);
+            lines.push(`High/critical alerts: ${highCriticalAlerts.length}`);
+            lines.push(`Workflow run: ${runUrl}`);
             lines.push('');
-            lines.push(`Repository : ${owner}/${repo}`);
-            lines.push(`Ref        : ${currentRef}`);
-            lines.push(`Commit     : ${context.sha}`);
-            lines.push(`Workflow   : ${runUrl}`);
-            lines.push(`Generated  : ${generatedAt}`);
-            lines.push(`Total Open CodeQL Alerts: ${alerts.length}`);
-            lines.push(`Total High/Critical Alerts: ${highCriticalAlerts.length}`);
-            lines.push('');
-            lines.push('========================================');
-            lines.push('');
-            lines.push('HIGH / CRITICAL ALERT DETAILS');
+            lines.push('FINDINGS');
+            lines.push('--------');
             lines.push('');
 
             highCriticalAlerts.slice(0, 25).forEach((alert, index) => {
@@ -197,10 +196,9 @@ jobs:
               const filePath = location?.path || 'Unknown file';
               const startLine = location?.start_line || 'unknown line';
 
-              lines.push(`${index + 1}. [${severity}] ${title}`);
-              lines.push(`   File     : ${filePath}`);
-              lines.push(`   Line     : ${startLine}`);
-              lines.push(`   Alert URL: ${alert.html_url}`);
+              lines.push(`[${index + 1}/${highCriticalAlerts.length}] ${severity}: ${title}`);
+              lines.push(`Location: ${filePath}:${startLine}`);
+              lines.push(`Details: ${alert.html_url}`);
               lines.push('');
             });
 
@@ -210,10 +208,9 @@ jobs:
               lines.push('');
             }
 
-            lines.push('========================================');
-            lines.push('');
-            lines.push('Action Required:');
-            lines.push('Please review and fix the above CodeQL security alerts.');
+            lines.push('NEXT STEP');
+            lines.push('---------');
+            lines.push('Review and remediate these findings in GitHub Code Scanning.');
             lines.push('');
 
             fs.writeFileSync('codeql-alert-message.txt', lines.join('\n'));
@@ -301,23 +298,24 @@ jobs:
             const repositoryUrl = `${context.serverUrl}/${owner}/${repo}`;
             const runUrl = `${repositoryUrl}/actions/runs/${context.runId}`;
             const generatedAt = new Date().toISOString();
+            const refName = currentRef.replace(/^refs\/(heads|pull)\//, '');
 
             const lines = [];
 
             lines.push('CODEQL SECURITY ALERT');
+            lines.push('=====================');
             lines.push('');
-            lines.push('========================================');
+            lines.push('Action required: high or critical findings are open.');
             lines.push('');
-            lines.push(`Repository : ${owner}/${repo}`);
-            lines.push(`Ref        : ${currentRef}`);
-            lines.push(`Commit     : ${context.sha}`);
-            lines.push(`Workflow   : ${runUrl}`);
-            lines.push(`Generated  : ${generatedAt}`);
-            lines.push(`Total High/Critical Alerts: ${highCriticalAlerts.length}`);
+            lines.push(`Repository: ${owner}/${repo}`);
+            lines.push(`Branch/ref: ${refName}`);
+            lines.push(`Commit: ${context.sha.substring(0, 12)}`);
+            lines.push(`Generated: ${generatedAt}`);
+            lines.push(`High/critical alerts: ${highCriticalAlerts.length}`);
+            lines.push(`Workflow run: ${runUrl}`);
             lines.push('');
-            lines.push('========================================');
-            lines.push('');
-            lines.push('HIGH / CRITICAL ALERT DETAILS');
+            lines.push('FINDINGS');
+            lines.push('--------');
             lines.push('');
 
             highCriticalAlerts.slice(0, 25).forEach((alert, index) => {
@@ -327,10 +325,9 @@ jobs:
               const filePath = location?.path || 'Unknown file';
               const startLine = location?.start_line || 'unknown line';
 
-              lines.push(`${index + 1}. [${severity}] ${title}`);
-              lines.push(`   File     : ${filePath}`);
-              lines.push(`   Line     : ${startLine}`);
-              lines.push(`   Alert URL: ${alert.html_url}`);
+              lines.push(`[${index + 1}/${highCriticalAlerts.length}] ${severity}: ${title}`);
+              lines.push(`Location: ${filePath}:${startLine}`);
+              lines.push(`Details: ${alert.html_url}`);
               lines.push('');
             });
 
@@ -340,10 +337,9 @@ jobs:
               lines.push('');
             }
 
-            lines.push('========================================');
-            lines.push('');
-            lines.push('Action Required:');
-            lines.push('Please review and fix the above CodeQL security alerts.');
+            lines.push('NEXT STEP');
+            lines.push('---------');
+            lines.push('Review and remediate these findings in GitHub Code Scanning.');
             lines.push('');
 
             fs.writeFileSync('codeql-alert-message.txt', lines.join('\n'));
