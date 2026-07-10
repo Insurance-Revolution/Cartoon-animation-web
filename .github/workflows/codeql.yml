@@ -26,7 +26,7 @@ env:
 
   # SES email settings
   SES_FROM_EMAIL: zayan.ahmad384@gmail.com
-  SES_TO_EMAIL: abdulmoizz4434@gmail.com, zayan.ahmad384@gmail.com
+  SES_TO_EMAIL: abdulmoizz4434@gmail.com, zayan.ahmad384@gmail.com, zayan.ahmed@systemsltd.com
 
   # S3 archive settings
   CODEQL_FINDINGS_BUCKET: codeql-scan-result-vulns
