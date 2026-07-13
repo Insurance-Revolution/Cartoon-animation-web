@@ -1,575 +1,626 @@
-# name: CodeQL
-
-# on:
-#   push:
-#     branches:
-#       - main
-#       - uat
-#       - dev
-
-#   pull_request:
-#     branches:
-#       - main
-#       - uat
-#       - dev
-
-
-#   workflow_dispatch:
-
-# permissions:
-#   contents: read
-#   security-events: write
-#   actions: read
-
-# env:
-#   AWS_REGION: us-east-1
-
-#   # SES email settings
-#   SES_FROM_EMAIL: zayan.ahmad384@gmail.com
-#   SES_TO_EMAIL: abdulmoizz4434@gmail.com, zayan.ahmad384@gmail.com, zayan.ahmed@systemsltd.com
-
-#   # S3 archive settings
-#   CODEQL_FINDINGS_BUCKET: codeql-scan-result-vulns
-#   CODEQL_FINDINGS_PREFIX: codeql-findings
-
-# jobs:
-#   analyze:
-#     name: Analyze
-#     runs-on: [self-hosted, Linux]
-
-#     strategy:
-#       fail-fast: false
-#       matrix:
-#         language: [javascript, typescript]
-
-#     steps:
-#       - name: Checkout repository
-#         uses: actions/checkout@v4
-
-#       - name: Verify Python used by workflow
-#         shell: bash
-#         run: |
-#           which python
-#           python --version
-#           which python3
-#           python3 --version
-
-#       - name: Initialize CodeQL
-#         uses: github/codeql-action/init@v3
-#         with:
-#           languages: ${{ matrix.language }}
-
-#       - name: Perform CodeQL Analysis
-#         id: analyze
-#         uses: github/codeql-action/analyze@v3
-#         with:
-#           output: codeql-results
-#           upload: always
-
-#       - name: Wait for code scanning alerts to update
-#         shell: bash
-#         run: sleep 30
-
-#       - name: Export CodeQL alerts
-#         id: codeql-alerts
-#         uses: actions/github-script@v7
-#         with:
-#           script: |
-#             const fs = require('fs');
-#             const { owner, repo } = context.repo;
-#             const currentRef = context.ref;
-
-#             const severities = new Set(['high', 'critical']);
-
-#             const alerts = await github.paginate(
-#               github.rest.codeScanning.listAlertsForRepo,
-#               {
-#                 owner,
-#                 repo,
-#                 state: 'open',
-#                 tool_name: 'CodeQL',
-#                 ref: currentRef,
-#                 per_page: 100
-#               }
-#             );
-
-#             const highCriticalAlerts = alerts.filter((alert) => {
-#               const securitySeverity = alert.rule?.security_severity_level?.toLowerCase();
-#               return severities.has(securitySeverity);
-#             });
-
-#             const repositoryUrl = `${context.serverUrl}/${owner}/${repo}`;
-#             const runUrl = `${repositoryUrl}/actions/runs/${context.runId}`;
-#             const generatedAt = new Date().toISOString();
-
-#             const normalizeAlert = (alert) => {
-#               const location = alert.most_recent_instance?.location;
-
-#               return {
-#                 number: alert.number,
-#                 state: alert.state,
-#                 created_at: alert.created_at,
-#                 updated_at: alert.updated_at,
-#                 dismissed_at: alert.dismissed_at,
-#                 dismissed_reason: alert.dismissed_reason,
-#                 fixed_at: alert.fixed_at,
-#                 alert_url: alert.html_url,
-#                 rule: {
-#                   id: alert.rule?.id,
-#                   name: alert.rule?.name,
-#                   description: alert.rule?.description,
-#                   severity: alert.rule?.severity,
-#                   security_severity_level: alert.rule?.security_severity_level,
-#                   tags: alert.rule?.tags || []
-#                 },
-#                 tool: {
-#                   name: alert.tool?.name,
-#                   version: alert.tool?.version,
-#                   guid: alert.tool?.guid
-#                 },
-#                 location: {
-#                   path: location?.path,
-#                   start_line: location?.start_line,
-#                   end_line: location?.end_line,
-#                   start_column: location?.start_column,
-#                   end_column: location?.end_column
-#                 },
-#                 most_recent_instance: alert.most_recent_instance
-#               };
-#             };
-
-#             const exportPayload = {
-#               repository: `${owner}/${repo}`,
-#               ref: currentRef,
-#               commit_sha: context.sha,
-#               workflow_run_id: String(context.runId),
-#               workflow_run_url: runUrl,
-#               generated_at: generatedAt,
-#               tool: 'CodeQL',
-#               total_open_alerts: alerts.length,
-#               high_critical_count: highCriticalAlerts.length,
-#               alerts: alerts.map(normalizeAlert)
-#             };
-
-#             const highCriticalPayload = {
-#               ...exportPayload,
-#               total_open_alerts: highCriticalAlerts.length,
-#               alerts: highCriticalAlerts.map(normalizeAlert)
-#             };
-
-#             fs.writeFileSync('codeql-alerts.json', JSON.stringify(exportPayload, null, 2));
-#             fs.writeFileSync('codeql-high-critical-alerts.json', JSON.stringify(highCriticalPayload, null, 2));
-
-#             const lines = [];
-
-#             lines.push('CODEQL FINDINGS SUMMARY');
-#             lines.push('');
-#             lines.push('========================================');
-#             lines.push('');
-#             lines.push(`Repository : ${owner}/${repo}`);
-#             lines.push(`Ref        : ${currentRef}`);
-#             lines.push(`Commit     : ${context.sha}`);
-#             lines.push(`Workflow   : ${runUrl}`);
-#             lines.push(`Generated  : ${generatedAt}`);
-#             lines.push(`Total Open CodeQL Alerts: ${alerts.length}`);
-#             lines.push(`Total High/Critical Alerts: ${highCriticalAlerts.length}`);
-#             lines.push('');
-#             lines.push('========================================');
-#             lines.push('');
-#             lines.push('HIGH / CRITICAL ALERT DETAILS');
-#             lines.push('');
-
-#             highCriticalAlerts.slice(0, 25).forEach((alert, index) => {
-#               const severity = alert.rule?.security_severity_level?.toUpperCase() || 'UNKNOWN';
-#               const title = alert.rule?.description || alert.rule?.name || 'Unknown CodeQL alert';
-#               const location = alert.most_recent_instance?.location;
-#               const filePath = location?.path || 'Unknown file';
-#               const startLine = location?.start_line || 'unknown line';
-
-#               lines.push(`${index + 1}. [${severity}] ${title}`);
-#               lines.push(`   File     : ${filePath}`);
-#               lines.push(`   Line     : ${startLine}`);
-#               lines.push(`   Alert URL: ${alert.html_url}`);
-#               lines.push('');
-#             });
-
-#             if (highCriticalAlerts.length > 25) {
-#               lines.push('NOTE: Only the first 25 alerts are listed.');
-#               lines.push('Please review the full list in GitHub Code Scanning.');
-#               lines.push('');
-#             }
-
-#             lines.push('========================================');
-#             lines.push('');
-#             lines.push('Action Required:');
-#             lines.push('Please review and fix the above CodeQL security alerts.');
-#             lines.push('');
-
-#             fs.writeFileSync('codeql-alert-summary.txt', lines.join('\n'));
-#             core.setOutput('count', String(highCriticalAlerts.length));
-
-#       - name: Sync CodeQL findings to S3
-#         shell: bash
-#         env:
-#           SARIF_OUTPUT_DIR: ${{ steps.analyze.outputs['sarif-output'] }}
-#         run: |
-#           set -euo pipefail
-
-#           if [ -z "$CODEQL_FINDINGS_BUCKET" ]; then
-#             echo "CODEQL_FINDINGS_BUCKET repository variable is required."
-#             exit 1
-#           fi
-
-#           SAFE_REPOSITORY="${GITHUB_REPOSITORY//\//-}"
-#           SAFE_REF="$(printf '%s' "$GITHUB_REF" | tr '/:' '--')"
-#           SAFE_LANGUAGE="$(printf '%s' "${{ matrix.language }}" | tr '/:' '--')"
-#           RUN_DATE="$(date -u +%F)"
-
-#           RUN_PREFIX="s3://${CODEQL_FINDINGS_BUCKET}/${CODEQL_FINDINGS_PREFIX}/${SAFE_REPOSITORY}/${SAFE_REF}/${SAFE_LANGUAGE}/runs/${RUN_DATE}/${GITHUB_RUN_ID}"
-#           LATEST_PREFIX="s3://${CODEQL_FINDINGS_BUCKET}/${CODEQL_FINDINGS_PREFIX}/${SAFE_REPOSITORY}/${SAFE_REF}/${SAFE_LANGUAGE}/latest"
-
-#           mkdir -p codeql-s3-archive
-
-#           cp codeql-alerts.json codeql-s3-archive/alerts.json
-#           cp codeql-high-critical-alerts.json codeql-s3-archive/high-critical-alerts.json
-#           cp codeql-alert-summary.txt codeql-s3-archive/summary.txt
-
-#           if [ -n "$SARIF_OUTPUT_DIR" ] && [ -d "$SARIF_OUTPUT_DIR" ]; then
-#             find "$SARIF_OUTPUT_DIR" -type f \( -name '*.sarif' -o -name '*.sarif.json' \) -exec cp {} codeql-s3-archive/ \;
-#           else
-#             echo "SARIF output directory was not found: ${SARIF_OUTPUT_DIR:-unset}"
-#             exit 1
-#           fi
-
-#           aws s3 sync codeql-s3-archive/ "$RUN_PREFIX/" \
-#             --region "$AWS_REGION" \
-#             --sse AES256
-
-#           aws s3 sync codeql-s3-archive/ "$LATEST_PREFIX/" \
-#             --region "$AWS_REGION" \
-#             --sse AES256
-
-#           echo "CodeQL findings synced to $RUN_PREFIX/"
-
-#   notify:
-#     name: Notify
-#     needs: analyze
-#     runs-on: [self-hosted, Linux]
-
-#     steps:
-#       - name: Wait for all code scanning alerts to settle
-#         shell: bash
-#         run: sleep 30
-
-#       - name: Build SES HTML email for High and Critical CodeQL alerts
-#         id: codeql-alerts
-#         uses: actions/github-script@v7
-#         env:
-#           SES_TO_EMAIL: ${{ env.SES_TO_EMAIL }}
-#         with:
-#           script: |
-#             const fs = require('fs');
-#             const { owner, repo } = context.repo;
-#             const currentRef = context.ref;
-#             const severities = new Set(['high', 'critical']);
-
-#             const escapeHtml = (value) => {
-#               return String(value ?? '')
-#                 .replace(/&/g, '&amp;')
-#                 .replace(/</g, '&lt;')
-#                 .replace(/>/g, '&gt;')
-#                 .replace(/"/g, '&quot;')
-#                 .replace(/'/g, '&#039;');
-#             };
-
-#             const alerts = await github.paginate(
-#               github.rest.codeScanning.listAlertsForRepo,
-#               {
-#                 owner,
-#                 repo,
-#                 state: 'open',
-#                 tool_name: 'CodeQL',
-#                 ref: currentRef,
-#                 per_page: 100
-#               }
-#             );
-
-#             const highCriticalAlerts = alerts.filter((alert) => {
-#               const securitySeverity = alert.rule?.security_severity_level?.toLowerCase();
-#               return severities.has(securitySeverity);
-#             });
-
-#             const repositoryUrl = `${context.serverUrl}/${owner}/${repo}`;
-#             const runUrl = `${repositoryUrl}/actions/runs/${context.runId}`;
-#             const codeScanningUrl = `${repositoryUrl}/security/code-scanning`;
-#             const generatedAt = new Date().toISOString();
-
-#             const criticalCount = highCriticalAlerts.filter(
-#               a => a.rule?.security_severity_level?.toLowerCase() === 'critical'
-#             ).length;
-
-#             const highCount = highCriticalAlerts.filter(
-#               a => a.rule?.security_severity_level?.toLowerCase() === 'high'
-#             ).length;
-
-#             const findingRows = highCriticalAlerts.slice(0, 25).map((alert, index) => {
-#               const severity = alert.rule?.security_severity_level?.toUpperCase() || 'UNKNOWN';
-#               const title = alert.rule?.description || alert.rule?.name || 'Unknown CodeQL alert';
-#               const location = alert.most_recent_instance?.location;
-#               const filePath = location?.path || 'Unknown file';
-#               const startLine = location?.start_line || 'unknown line';
-
-#               const badgeColor = severity === 'CRITICAL' ? '#7f1d1d' : '#dc2626';
-
-#               return `
-#                 <tr>
-#                   <td style="padding:12px;border-bottom:1px solid #e5e7eb;color:#111827;">${index + 1}</td>
-#                   <td style="padding:12px;border-bottom:1px solid #e5e7eb;">
-#                     <span style="display:inline-block;padding:4px 10px;border-radius:999px;background:${badgeColor};color:#ffffff;font-size:12px;font-weight:700;">
-#                       ${escapeHtml(severity)}
-#                     </span>
-#                   </td>
-#                   <td style="padding:12px;border-bottom:1px solid #e5e7eb;color:#111827;font-weight:600;">
-#                     ${escapeHtml(title)}
-#                   </td>
-#                   <td style="padding:12px;border-bottom:1px solid #e5e7eb;color:#374151;">
-#                     ${escapeHtml(filePath)}:${escapeHtml(startLine)}
-#                   </td>
-#                   <td style="padding:12px;border-bottom:1px solid #e5e7eb;">
-#                     <a href="${escapeHtml(alert.html_url)}" style="color:#2563eb;text-decoration:none;font-weight:600;">View</a>
-#                   </td>
-#                 </tr>
-#               `;
-#             }).join('');
-
-#             const html = `
-#             <!DOCTYPE html>
-#             <html>
-#               <body style="margin:0;padding:0;background:#f3f4f6;font-family:Arial,Helvetica,sans-serif;color:#111827;">
-#                 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f3f4f6;padding:24px 0;">
-#                   <tr>
-#                     <td align="center">
-#                       <table role="presentation" width="720" cellspacing="0" cellpadding="0" style="background:#ffffff;border-radius:14px;overflow:hidden;border:1px solid #e5e7eb;">
-
-#                         <tr>
-#                           <td style="background:#08111f;padding:32px 36px;color:#ffffff;">
-#                             <div style="font-size:34px;font-weight:800;margin-bottom:8px;">🚨 CodeQL Findings</div>
-#                             <div style="font-size:18px;font-weight:600;color:#fecaca;">High / Critical Severity Alerts Detected</div>
-#                             <div style="font-size:14px;color:#cbd5e1;margin-top:12px;">
-#                               Please review the following CodeQL security findings and take necessary action.
-#                             </div>
-#                           </td>
-#                         </tr>
-
-#                         <tr>
-#                           <td style="padding:24px 28px;">
-#                             <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border:1px solid #dbeafe;border-radius:12px;background:#f8fbff;">
-#                               <tr>
-#                                 <td style="padding:18px;width:50%;vertical-align:top;">
-#                                   <div style="font-size:13px;color:#64748b;font-weight:700;">📦 Repository</div>
-#                                   <div style="margin-top:6px;font-size:14px;color:#111827;font-weight:600;">${escapeHtml(owner)}/${escapeHtml(repo)}</div>
-#                                 </td>
-#                                 <td style="padding:18px;width:50%;vertical-align:top;">
-#                                   <div style="font-size:13px;color:#64748b;font-weight:700;">🌿 Branch / Ref</div>
-#                                   <div style="margin-top:6px;font-size:14px;color:#111827;font-weight:600;">${escapeHtml(currentRef)}</div>
-#                                 </td>
-#                               </tr>
-#                               <tr>
-#                                 <td style="padding:18px;width:50%;vertical-align:top;">
-#                                   <div style="font-size:13px;color:#64748b;font-weight:700;">🧩 Commit</div>
-#                                   <div style="margin-top:6px;font-size:14px;color:#111827;font-weight:600;word-break:break-all;">${escapeHtml(context.sha)}</div>
-#                                 </td>
-#                                 <td style="padding:18px;width:50%;vertical-align:top;">
-#                                   <div style="font-size:13px;color:#64748b;font-weight:700;">🕒 Generated</div>
-#                                   <div style="margin-top:6px;font-size:14px;color:#111827;font-weight:600;">${escapeHtml(generatedAt)}</div>
-#                                 </td>
-#                               </tr>
-#                               <tr>
-#                                 <td colspan="2" style="padding:18px;">
-#                                   <div style="font-size:13px;color:#64748b;font-weight:700;">🔗 Workflow Run</div>
-#                                   <div style="margin-top:8px;">
-#                                     <a href="${escapeHtml(runUrl)}" style="color:#2563eb;font-weight:700;text-decoration:none;">View Workflow Run</a>
-#                                   </div>
-#                                 </td>
-#                               </tr>
-#                             </table>
-#                           </td>
-#                         </tr>
-
-#                         <tr>
-#                           <td style="padding:0 28px 20px 28px;">
-#                             <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;">
-#                               <tr>
-#                                 <td style="padding:18px;background:#f9fafb;width:33%;">
-#                                   <div style="font-size:13px;color:#64748b;font-weight:700;">⚠️ Total High/Critical</div>
-#                                   <div style="font-size:28px;color:#dc2626;font-weight:800;margin-top:6px;">${highCriticalAlerts.length}</div>
-#                                 </td>
-#                                 <td style="padding:18px;background:#ffffff;width:33%;border-left:1px solid #e5e7eb;">
-#                                   <div style="font-size:13px;color:#64748b;font-weight:700;">🛑 Critical</div>
-#                                   <div style="font-size:28px;color:#111827;font-weight:800;margin-top:6px;">${criticalCount}</div>
-#                                 </td>
-#                                 <td style="padding:18px;background:#ffffff;width:33%;border-left:1px solid #e5e7eb;">
-#                                   <div style="font-size:13px;color:#64748b;font-weight:700;">🔴 High</div>
-#                                   <div style="font-size:28px;color:#111827;font-weight:800;margin-top:6px;">${highCount}</div>
-#                                 </td>
-#                               </tr>
-#                             </table>
-#                           </td>
-#                         </tr>
-
-#                         <tr>
-#                           <td style="padding:0 28px 24px 28px;">
-#                             <div style="font-size:20px;font-weight:800;margin-bottom:12px;color:#111827;">🔎 Alert Details</div>
-
-#                             <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;">
-#                               <thead>
-#                                 <tr style="background:#111827;color:#ffffff;">
-#                                   <th align="left" style="padding:12px;font-size:13px;">#</th>
-#                                   <th align="left" style="padding:12px;font-size:13px;">Severity</th>
-#                                   <th align="left" style="padding:12px;font-size:13px;">Finding</th>
-#                                   <th align="left" style="padding:12px;font-size:13px;">File / Line</th>
-#                                   <th align="left" style="padding:12px;font-size:13px;">Link</th>
-#                                 </tr>
-#                               </thead>
-#                               <tbody>
-#                                 ${findingRows}
-#                               </tbody>
-#                             </table>
-
-#                             ${highCriticalAlerts.length > 25 ? `
-#                               <div style="margin-top:12px;font-size:13px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:12px;">
-#                                 Only the first 25 findings are listed in this email. Please review the full list in GitHub Code Scanning.
-#                               </div>
-#                             ` : ''}
-#                           </td>
-#                         </tr>
-
-#                         <tr>
-#                           <td style="padding:0 28px 28px 28px;">
-#                             <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#fffbeb;border:1px solid #fde68a;border-radius:12px;">
-#                               <tr>
-#                                 <td style="padding:20px;">
-#                                   <div style="font-size:18px;font-weight:800;color:#111827;">💡 Action Required</div>
-#                                   <div style="font-size:14px;color:#374151;margin-top:8px;line-height:1.6;">
-#                                     Please review the above CodeQL findings and remediate the issues as soon as possible.
-#                                   </div>
-#                                   <div style="margin-top:16px;">
-#                                     <a href="${escapeHtml(codeScanningUrl)}" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;font-weight:700;padding:12px 18px;border-radius:8px;">
-#                                       View Code Scanning Alerts
-#                                     </a>
-#                                   </div>
-#                                 </td>
-#                               </tr>
-#                             </table>
-#                           </td>
-#                         </tr>
-
-#                         <tr>
-#                           <td style="padding:20px 28px;background:#f9fafb;border-top:1px solid #e5e7eb;color:#64748b;font-size:13px;line-height:1.6;">
-#                             🛡️ This is an automated CodeQL security notification from GitHub Actions.<br/>
-#                             Please do not reply directly to this email.
-#                           </td>
-#                         </tr>
-
-#                       </table>
-#                     </td>
-#                   </tr>
-#                 </table>
-#               </body>
-#             </html>
-#             `;
-
-#             const textLines = [];
-#             textLines.push('🚨 CodeQL Findings for High/Critical Alerts');
-#             textLines.push('');
-#             textLines.push(`Repository : ${owner}/${repo}`);
-#             textLines.push(`Ref        : ${currentRef}`);
-#             textLines.push(`Commit     : ${context.sha}`);
-#             textLines.push(`Workflow   : ${runUrl}`);
-#             textLines.push(`Generated  : ${generatedAt}`);
-#             textLines.push('');
-#             textLines.push(`Total High/Critical Alerts: ${highCriticalAlerts.length}`);
-#             textLines.push(`Critical: ${criticalCount}`);
-#             textLines.push(`High: ${highCount}`);
-#             textLines.push('');
-#             textLines.push('Alert Details:');
-#             textLines.push('');
-
-#             highCriticalAlerts.slice(0, 25).forEach((alert, index) => {
-#               const severity = alert.rule?.security_severity_level?.toUpperCase() || 'UNKNOWN';
-#               const title = alert.rule?.description || alert.rule?.name || 'Unknown CodeQL alert';
-#               const location = alert.most_recent_instance?.location;
-#               const filePath = location?.path || 'Unknown file';
-#               const startLine = location?.start_line || 'unknown line';
-
-#               textLines.push(`${index + 1}. [${severity}] ${title}`);
-#               textLines.push(`   File: ${filePath}`);
-#               textLines.push(`   Line: ${startLine}`);
-#               textLines.push(`   Alert URL: ${alert.html_url}`);
-#               textLines.push('');
-#             });
-
-#             textLines.push('Action Required:');
-#             textLines.push('Please review and fix the above CodeQL security alerts.');
-#             textLines.push('');
-#             textLines.push(`GitHub Code Scanning: ${codeScanningUrl}`);
-
-#             const subject = `🚨 CodeQL Findings for High/Critical Alerts | ${owner}/${repo} | ${highCriticalAlerts.length} Alert(s)`;
-
-#             const sesMessage = {
-#               Subject: {
-#                 Data: subject,
-#                 Charset: 'UTF-8'
-#               },
-#               Body: {
-#                 Html: {
-#                   Data: html,
-#                   Charset: 'UTF-8'
-#                 },
-#                 Text: {
-#                   Data: textLines.join('\n'),
-#                   Charset: 'UTF-8'
-#                 }
-#               }
-#             };
-
-#             const toAddresses = (process.env.SES_TO_EMAIL || '')
-#               .split(',')
-#               .map(email => email.trim())
-#               .filter(Boolean);
-
-#             if (toAddresses.length === 0) {
-#               throw new Error('SES_TO_EMAIL is empty. Please set SES_TO_EMAIL in workflow env.');
-#             }
-
-#             const sesDestination = {
-#               ToAddresses: toAddresses
-#             };
-
-#             fs.writeFileSync('codeql-alert-message.html', html);
-#             fs.writeFileSync('codeql-alert-message.txt', textLines.join('\n'));
-#             fs.writeFileSync('ses-message.json', JSON.stringify(sesMessage, null, 2));
-#             fs.writeFileSync('ses-destination.json', JSON.stringify(sesDestination, null, 2));
-
-#             core.setOutput('count', String(highCriticalAlerts.length));
-
-#       - name: Send High and Critical CodeQL alerts using AWS SES
-#         if: steps.codeql-alerts.outputs.count != '0'
-#         shell: bash
-#         env:
-#           ALERT_COUNT: ${{ steps.codeql-alerts.outputs.count }}
-#         run: |
-#           set -euo pipefail
-
-#           echo "Sending CodeQL HTML email using AWS SES..."
-#           echo "From: $SES_FROM_EMAIL"
-#           echo "To: $SES_TO_EMAIL"
-#           echo "Alert count: $ALERT_COUNT"
-
-#           aws ses send-email \
-#             --region "$AWS_REGION" \
-#             --from "$SES_FROM_EMAIL" \
-#             --destination file://ses-destination.json \
-#             --message file://ses-message.json
-
-#           echo "SES email sent successfully."
+name: CodeQL
+
+on:
+  # Commit/push triggers are intentionally disabled. This workflow must run only
+  # when a pull request targets one of the protected branches below.
+  # push:
+  #   branches:
+  #     - main
+  #     - uat
+  #     - dev
+
+  pull_request:
+    branches:
+      - main
+      - uat
+      - dev
+    types: [opened, synchronize, reopened, ready_for_review]
+
+  # Manual runs are disabled so every run is tied to a pull request.
+  # workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+env:
+#  NODE_EXTRA_CA_CERTS: /usr/local/share/ca-certificates/ZscalerRootCertificate-2048-SHA256.crt
+  AWS_REGION: us-east-1
+
+  # SES email settings
+  SES_FROM_EMAIL: zayan.ahmad384@gmail.com
+  SES_TO_EMAIL: zayan.ahmad384@gmail.com, abdulmoizz4434@gmail.com
+
+  # S3 archive settings
+  CODEQL_FINDINGS_BUCKET: codeql-scan-result-vulns
+  CODEQL_FINDINGS_PREFIX: codeql-findings
+
+jobs:
+  analyze:
+    name: Analyze
+    runs-on: [self-hosted, ec2-runner]
+
+    outputs:
+      high-critical-count: ${{ steps.codeql-alerts.outputs.count }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python, javascript-typescript]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure Python 3.9 for CodeQL
+        shell: bash
+        run: |
+          echo "Checking available Python versions..."
+          python3 --version || true
+          python3.9 --version || true
+          which python3 || true
+          which python3.9 || true
+
+          echo "Creating temporary python/python3 symlinks for this workflow..."
+          mkdir -p "$RUNNER_TEMP/python-bin"
+
+          ln -sf /bin/python3.9 "$RUNNER_TEMP/python-bin/python"
+          ln -sf /bin/python3.9 "$RUNNER_TEMP/python-bin/python3"
+
+          echo "$RUNNER_TEMP/python-bin" >> "$GITHUB_PATH"
+
+      - name: Verify Python used by workflow
+        shell: bash
+        run: |
+          which python
+          python --version
+          which python3
+          python3 --version
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+
+      - name: Perform CodeQL Analysis
+        id: analyze
+        uses: github/codeql-action/analyze@v3
+        with:
+          output: codeql-results
+          upload: always
+
+      - name: Wait for code scanning alerts to update
+        shell: bash
+        run: sleep 30
+
+      - name: Export CodeQL alerts
+        id: codeql-alerts
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const { owner, repo } = context.repo;
+            const currentRef = context.ref;
+            const pullRequestNumber = context.payload.pull_request.number;
+
+            const severities = new Set(['high', 'critical']);
+
+            const alerts = await github.paginate(
+              github.rest.codeScanning.listAlertsForRepo,
+              {
+                owner,
+                repo,
+                state: 'open',
+                tool_name: 'CodeQL',
+                pr: pullRequestNumber,
+                per_page: 100
+              }
+            );
+
+            const highCriticalAlerts = alerts.filter((alert) => {
+              const securitySeverity = alert.rule?.security_severity_level?.toLowerCase();
+              return severities.has(securitySeverity);
+            });
+
+            const repositoryUrl = `${context.serverUrl}/${owner}/${repo}`;
+            const runUrl = `${repositoryUrl}/actions/runs/${context.runId}`;
+            const generatedAt = new Date().toISOString();
+
+            const normalizeAlert = (alert) => {
+              const location = alert.most_recent_instance?.location;
+
+              return {
+                number: alert.number,
+                state: alert.state,
+                created_at: alert.created_at,
+                updated_at: alert.updated_at,
+                dismissed_at: alert.dismissed_at,
+                dismissed_reason: alert.dismissed_reason,
+                fixed_at: alert.fixed_at,
+                alert_url: alert.html_url,
+                rule: {
+                  id: alert.rule?.id,
+                  name: alert.rule?.name,
+                  description: alert.rule?.description,
+                  severity: alert.rule?.severity,
+                  security_severity_level: alert.rule?.security_severity_level,
+                  tags: alert.rule?.tags || []
+                },
+                tool: {
+                  name: alert.tool?.name,
+                  version: alert.tool?.version,
+                  guid: alert.tool?.guid
+                },
+                location: {
+                  path: location?.path,
+                  start_line: location?.start_line,
+                  end_line: location?.end_line,
+                  start_column: location?.start_column,
+                  end_column: location?.end_column
+                },
+                most_recent_instance: alert.most_recent_instance
+              };
+            };
+
+            const exportPayload = {
+              repository: `${owner}/${repo}`,
+              ref: currentRef,
+              commit_sha: context.sha,
+              workflow_run_id: String(context.runId),
+              workflow_run_url: runUrl,
+              generated_at: generatedAt,
+              tool: 'CodeQL',
+              total_open_alerts: alerts.length,
+              high_critical_count: highCriticalAlerts.length,
+              alerts: alerts.map(normalizeAlert)
+            };
+
+            const highCriticalPayload = {
+              ...exportPayload,
+              total_open_alerts: highCriticalAlerts.length,
+              alerts: highCriticalAlerts.map(normalizeAlert)
+            };
+
+            fs.writeFileSync('codeql-alerts.json', JSON.stringify(exportPayload, null, 2));
+            fs.writeFileSync('codeql-high-critical-alerts.json', JSON.stringify(highCriticalPayload, null, 2));
+
+            const lines = [];
+
+            lines.push('CODEQL FINDINGS SUMMARY');
+            lines.push('');
+            lines.push('========================================');
+            lines.push('');
+            lines.push(`Repository : ${owner}/${repo}`);
+            lines.push(`Ref        : ${currentRef}`);
+            lines.push(`Commit     : ${context.sha}`);
+            lines.push(`Workflow   : ${runUrl}`);
+            lines.push(`Generated  : ${generatedAt}`);
+            lines.push(`Total Open CodeQL Alerts: ${alerts.length}`);
+            lines.push(`Total High/Critical Alerts: ${highCriticalAlerts.length}`);
+            lines.push('');
+            lines.push('========================================');
+            lines.push('');
+            lines.push('HIGH / CRITICAL ALERT DETAILS');
+            lines.push('');
+
+            highCriticalAlerts.slice(0, 25).forEach((alert, index) => {
+              const severity = alert.rule?.security_severity_level?.toUpperCase() || 'UNKNOWN';
+              const title = alert.rule?.description || alert.rule?.name || 'Unknown CodeQL alert';
+              const location = alert.most_recent_instance?.location;
+              const filePath = location?.path || 'Unknown file';
+              const startLine = location?.start_line || 'unknown line';
+
+              lines.push(`${index + 1}. [${severity}] ${title}`);
+              lines.push(`   File     : ${filePath}`);
+              lines.push(`   Line     : ${startLine}`);
+              lines.push(`   Alert URL: ${alert.html_url}`);
+              lines.push('');
+            });
+
+            if (highCriticalAlerts.length > 25) {
+              lines.push('NOTE: Only the first 25 alerts are listed.');
+              lines.push('Please review the full list in GitHub Code Scanning.');
+              lines.push('');
+            }
+
+            lines.push('========================================');
+            lines.push('');
+            lines.push('Action Required:');
+            lines.push('Please review and fix the above CodeQL security alerts.');
+            lines.push('');
+
+            fs.writeFileSync('codeql-alert-summary.txt', lines.join('\n'));
+            core.setOutput('count', String(highCriticalAlerts.length));
+
+      - name: Sync CodeQL findings to S3
+        shell: bash
+        env:
+          SARIF_OUTPUT_DIR: ${{ steps.analyze.outputs['sarif-output'] }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$CODEQL_FINDINGS_BUCKET" ]; then
+            echo "CODEQL_FINDINGS_BUCKET repository variable is required."
+            exit 1
+          fi
+
+          SAFE_REPOSITORY="${GITHUB_REPOSITORY//\//-}"
+          SAFE_REF="$(printf '%s' "$GITHUB_REF" | tr '/:' '--')"
+          SAFE_LANGUAGE="$(printf '%s' "${{ matrix.language }}" | tr '/:' '--')"
+          RUN_DATE="$(date -u +%F)"
+
+          RUN_PREFIX="s3://${CODEQL_FINDINGS_BUCKET}/${CODEQL_FINDINGS_PREFIX}/${SAFE_REPOSITORY}/${SAFE_REF}/${SAFE_LANGUAGE}/runs/${RUN_DATE}/${GITHUB_RUN_ID}"
+          LATEST_PREFIX="s3://${CODEQL_FINDINGS_BUCKET}/${CODEQL_FINDINGS_PREFIX}/${SAFE_REPOSITORY}/${SAFE_REF}/${SAFE_LANGUAGE}/latest"
+
+          mkdir -p codeql-s3-archive
+
+          cp codeql-alerts.json codeql-s3-archive/alerts.json
+          cp codeql-high-critical-alerts.json codeql-s3-archive/high-critical-alerts.json
+          cp codeql-alert-summary.txt codeql-s3-archive/summary.txt
+
+          if [ -n "$SARIF_OUTPUT_DIR" ] && [ -d "$SARIF_OUTPUT_DIR" ]; then
+            find "$SARIF_OUTPUT_DIR" -type f \( -name '*.sarif' -o -name '*.sarif.json' \) -exec cp {} codeql-s3-archive/ \;
+          else
+            echo "SARIF output directory was not found: ${SARIF_OUTPUT_DIR:-unset}"
+            exit 1
+          fi
+
+          aws s3 sync codeql-s3-archive/ "$RUN_PREFIX/" \
+            --region "$AWS_REGION" \
+            --sse AES256
+
+          aws s3 sync codeql-s3-archive/ "$LATEST_PREFIX/" \
+            --region "$AWS_REGION" \
+            --sse AES256
+
+          echo "CodeQL findings synced to $RUN_PREFIX/"
+
+  security-gate:
+    name: Enforce High/Critical security gate
+    needs: analyze
+    runs-on: [self-hosted, ec2-runner]
+
+    steps:
+      - name: Fail pull request for High or Critical findings
+        shell: bash
+        env:
+          HIGH_CRITICAL_COUNT: ${{ needs.analyze.outputs.high-critical-count }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$HIGH_CRITICAL_COUNT" ]; then
+            echo "Unable to determine the number of High/Critical CodeQL findings."
+            exit 1
+          fi
+
+          if [ "$HIGH_CRITICAL_COUNT" -gt 0 ]; then
+            echo "Blocking this pull request: CodeQL found $HIGH_CRITICAL_COUNT open High/Critical alert(s)."
+            exit 1
+          fi
+
+          echo "Security gate passed: no open High/Critical CodeQL alerts were found for this pull request."
+
+  notify:
+    name: Notify
+    needs: analyze
+    runs-on: [self-hosted, ec2-runner]
+
+    steps:
+      - name: Wait for all code scanning alerts to settle
+        shell: bash
+        run: sleep 30
+
+      - name: Build SES HTML email for High and Critical CodeQL alerts
+        id: codeql-alerts
+        uses: actions/github-script@v7
+        env:
+          SES_TO_EMAIL: ${{ env.SES_TO_EMAIL }}
+        with:
+          script: |
+            const fs = require('fs');
+            const { owner, repo } = context.repo;
+            const currentRef = context.ref;
+            const pullRequestNumber = context.payload.pull_request.number;
+            const severities = new Set(['high', 'critical']);
+
+            const escapeHtml = (value) => {
+              return String(value ?? '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+            };
+
+            const alerts = await github.paginate(
+              github.rest.codeScanning.listAlertsForRepo,
+              {
+                owner,
+                repo,
+                state: 'open',
+                tool_name: 'CodeQL',
+                pr: pullRequestNumber,
+                per_page: 100
+              }
+            );
+
+            const highCriticalAlerts = alerts.filter((alert) => {
+              const securitySeverity = alert.rule?.security_severity_level?.toLowerCase();
+              return severities.has(securitySeverity);
+            });
+
+            const repositoryUrl = `${context.serverUrl}/${owner}/${repo}`;
+            const runUrl = `${repositoryUrl}/actions/runs/${context.runId}`;
+            const codeScanningUrl = `${repositoryUrl}/security/code-scanning`;
+            const generatedAt = new Date().toISOString();
+
+            const criticalCount = highCriticalAlerts.filter(
+              a => a.rule?.security_severity_level?.toLowerCase() === 'critical'
+            ).length;
+
+            const highCount = highCriticalAlerts.filter(
+              a => a.rule?.security_severity_level?.toLowerCase() === 'high'
+            ).length;
+
+            const findingRows = highCriticalAlerts.slice(0, 25).map((alert, index) => {
+              const severity = alert.rule?.security_severity_level?.toUpperCase() || 'UNKNOWN';
+              const title = alert.rule?.description || alert.rule?.name || 'Unknown CodeQL alert';
+              const location = alert.most_recent_instance?.location;
+              const filePath = location?.path || 'Unknown file';
+              const startLine = location?.start_line || 'unknown line';
+
+              const badgeColor = severity === 'CRITICAL' ? '#7f1d1d' : '#dc2626';
+
+              return `
+                <tr>
+                  <td style="padding:12px;border-bottom:1px solid #e5e7eb;color:#111827;">${index + 1}</td>
+                  <td style="padding:12px;border-bottom:1px solid #e5e7eb;">
+                    <span style="display:inline-block;padding:4px 10px;border-radius:999px;background:${badgeColor};color:#ffffff;font-size:12px;font-weight:700;">
+                      ${escapeHtml(severity)}
+                    </span>
+                  </td>
+                  <td style="padding:12px;border-bottom:1px solid #e5e7eb;color:#111827;font-weight:600;">
+                    ${escapeHtml(title)}
+                  </td>
+                  <td style="padding:12px;border-bottom:1px solid #e5e7eb;color:#374151;">
+                    ${escapeHtml(filePath)}:${escapeHtml(startLine)}
+                  </td>
+                  <td style="padding:12px;border-bottom:1px solid #e5e7eb;">
+                    <a href="${escapeHtml(alert.html_url)}" style="color:#2563eb;text-decoration:none;font-weight:600;">View</a>
+                  </td>
+                </tr>
+              `;
+            }).join('');
+
+            const html = `
+            <!DOCTYPE html>
+            <html>
+              <body style="margin:0;padding:0;background:#f3f4f6;font-family:Arial,Helvetica,sans-serif;color:#111827;">
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f3f4f6;padding:24px 0;">
+                  <tr>
+                    <td align="center">
+                      <table role="presentation" width="720" cellspacing="0" cellpadding="0" style="background:#ffffff;border-radius:14px;overflow:hidden;border:1px solid #e5e7eb;">
+
+                        <tr>
+                          <td style="background:#08111f;padding:32px 36px;color:#ffffff;">
+                            <div style="font-size:34px;font-weight:800;margin-bottom:8px;">🚨 CodeQL Findings</div>
+                            <div style="font-size:18px;font-weight:600;color:#fecaca;">High / Critical Severity Alerts Detected</div>
+                            <div style="font-size:14px;color:#cbd5e1;margin-top:12px;">
+                              Please review the following CodeQL security findings and take necessary action.
+                            </div>
+                          </td>
+                        </tr>
+
+                        <tr>
+                          <td style="padding:24px 28px;">
+                            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border:1px solid #dbeafe;border-radius:12px;background:#f8fbff;">
+                              <tr>
+                                <td style="padding:18px;width:50%;vertical-align:top;">
+                                  <div style="font-size:13px;color:#64748b;font-weight:700;">📦 Repository</div>
+                                  <div style="margin-top:6px;font-size:14px;color:#111827;font-weight:600;">${escapeHtml(owner)}/${escapeHtml(repo)}</div>
+                                </td>
+                                <td style="padding:18px;width:50%;vertical-align:top;">
+                                  <div style="font-size:13px;color:#64748b;font-weight:700;">🌿 Branch / Ref</div>
+                                  <div style="margin-top:6px;font-size:14px;color:#111827;font-weight:600;">${escapeHtml(currentRef)}</div>
+                                </td>
+                              </tr>
+                              <tr>
+                                <td style="padding:18px;width:50%;vertical-align:top;">
+                                  <div style="font-size:13px;color:#64748b;font-weight:700;">🧩 Commit</div>
+                                  <div style="margin-top:6px;font-size:14px;color:#111827;font-weight:600;word-break:break-all;">${escapeHtml(context.sha)}</div>
+                                </td>
+                                <td style="padding:18px;width:50%;vertical-align:top;">
+                                  <div style="font-size:13px;color:#64748b;font-weight:700;">🕒 Generated</div>
+                                  <div style="margin-top:6px;font-size:14px;color:#111827;font-weight:600;">${escapeHtml(generatedAt)}</div>
+                                </td>
+                              </tr>
+                              <tr>
+                                <td colspan="2" style="padding:18px;">
+                                  <div style="font-size:13px;color:#64748b;font-weight:700;">🔗 Workflow Run</div>
+                                  <div style="margin-top:8px;">
+                                    <a href="${escapeHtml(runUrl)}" style="color:#2563eb;font-weight:700;text-decoration:none;">View Workflow Run</a>
+                                  </div>
+                                </td>
+                              </tr>
+                            </table>
+                          </td>
+                        </tr>
+
+                        <tr>
+                          <td style="padding:0 28px 20px 28px;">
+                            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;">
+                              <tr>
+                                <td style="padding:18px;background:#f9fafb;width:33%;">
+                                  <div style="font-size:13px;color:#64748b;font-weight:700;">⚠️ Total High/Critical</div>
+                                  <div style="font-size:28px;color:#dc2626;font-weight:800;margin-top:6px;">${highCriticalAlerts.length}</div>
+                                </td>
+                                <td style="padding:18px;background:#ffffff;width:33%;border-left:1px solid #e5e7eb;">
+                                  <div style="font-size:13px;color:#64748b;font-weight:700;">🛑 Critical</div>
+                                  <div style="font-size:28px;color:#111827;font-weight:800;margin-top:6px;">${criticalCount}</div>
+                                </td>
+                                <td style="padding:18px;background:#ffffff;width:33%;border-left:1px solid #e5e7eb;">
+                                  <div style="font-size:13px;color:#64748b;font-weight:700;">🔴 High</div>
+                                  <div style="font-size:28px;color:#111827;font-weight:800;margin-top:6px;">${highCount}</div>
+                                </td>
+                              </tr>
+                            </table>
+                          </td>
+                        </tr>
+
+                        <tr>
+                          <td style="padding:0 28px 24px 28px;">
+                            <div style="font-size:20px;font-weight:800;margin-bottom:12px;color:#111827;">🔎 Alert Details</div>
+
+                            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;">
+                              <thead>
+                                <tr style="background:#111827;color:#ffffff;">
+                                  <th align="left" style="padding:12px;font-size:13px;">#</th>
+                                  <th align="left" style="padding:12px;font-size:13px;">Severity</th>
+                                  <th align="left" style="padding:12px;font-size:13px;">Finding</th>
+                                  <th align="left" style="padding:12px;font-size:13px;">File / Line</th>
+                                  <th align="left" style="padding:12px;font-size:13px;">Link</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                ${findingRows}
+                              </tbody>
+                            </table>
+
+                            ${highCriticalAlerts.length > 25 ? `
+                              <div style="margin-top:12px;font-size:13px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:12px;">
+                                Only the first 25 findings are listed in this email. Please review the full list in GitHub Code Scanning.
+                              </div>
+                            ` : ''}
+                          </td>
+                        </tr>
+
+                        <tr>
+                          <td style="padding:0 28px 28px 28px;">
+                            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#fffbeb;border:1px solid #fde68a;border-radius:12px;">
+                              <tr>
+                                <td style="padding:20px;">
+                                  <div style="font-size:18px;font-weight:800;color:#111827;">💡 Action Required</div>
+                                  <div style="font-size:14px;color:#374151;margin-top:8px;line-height:1.6;">
+                                    Please review the above CodeQL findings and remediate the issues as soon as possible.
+                                  </div>
+                                  <div style="margin-top:16px;">
+                                    <a href="${escapeHtml(codeScanningUrl)}" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;font-weight:700;padding:12px 18px;border-radius:8px;">
+                                      View Code Scanning Alerts
+                                    </a>
+                                  </div>
+                                </td>
+                              </tr>
+                            </table>
+                          </td>
+                        </tr>
+
+                        <tr>
+                          <td style="padding:20px 28px;background:#f9fafb;border-top:1px solid #e5e7eb;color:#64748b;font-size:13px;line-height:1.6;">
+                            🛡️ This is an automated CodeQL security notification from GitHub Actions.<br/>
+                            Please do not reply directly to this email.
+                          </td>
+                        </tr>
+
+                      </table>
+                    </td>
+                  </tr>
+                </table>
+              </body>
+            </html>
+            `;
+
+            const textLines = [];
+            textLines.push('🚨 CodeQL Findings for High/Critical Alerts');
+            textLines.push('');
+            textLines.push(`Repository : ${owner}/${repo}`);
+            textLines.push(`Ref        : ${currentRef}`);
+            textLines.push(`Commit     : ${context.sha}`);
+            textLines.push(`Workflow   : ${runUrl}`);
+            textLines.push(`Generated  : ${generatedAt}`);
+            textLines.push('');
+            textLines.push(`Total High/Critical Alerts: ${highCriticalAlerts.length}`);
+            textLines.push(`Critical: ${criticalCount}`);
+            textLines.push(`High: ${highCount}`);
+            textLines.push('');
+            textLines.push('Alert Details:');
+            textLines.push('');
+
+            highCriticalAlerts.slice(0, 25).forEach((alert, index) => {
+              const severity = alert.rule?.security_severity_level?.toUpperCase() || 'UNKNOWN';
+              const title = alert.rule?.description || alert.rule?.name || 'Unknown CodeQL alert';
+              const location = alert.most_recent_instance?.location;
+              const filePath = location?.path || 'Unknown file';
+              const startLine = location?.start_line || 'unknown line';
+
+              textLines.push(`${index + 1}. [${severity}] ${title}`);
+              textLines.push(`   File: ${filePath}`);
+              textLines.push(`   Line: ${startLine}`);
+              textLines.push(`   Alert URL: ${alert.html_url}`);
+              textLines.push('');
+            });
+
+            textLines.push('Action Required:');
+            textLines.push('Please review and fix the above CodeQL security alerts.');
+            textLines.push('');
+            textLines.push(`GitHub Code Scanning: ${codeScanningUrl}`);
+
+            const subject = `🚨 CodeQL Findings for High/Critical Alerts | ${owner}/${repo} | ${highCriticalAlerts.length} Alert(s)`;
+
+            const sesMessage = {
+              Subject: {
+                Data: subject,
+                Charset: 'UTF-8'
+              },
+              Body: {
+                Html: {
+                  Data: html,
+                  Charset: 'UTF-8'
+                },
+                Text: {
+                  Data: textLines.join('\n'),
+                  Charset: 'UTF-8'
+                }
+              }
+            };
+
+            const toAddresses = (process.env.SES_TO_EMAIL || '')
+              .split(',')
+              .map(email => email.trim())
+              .filter(Boolean);
+
+            if (toAddresses.length === 0) {
+              throw new Error('SES_TO_EMAIL is empty. Please set SES_TO_EMAIL in workflow env.');
+            }
+
+            const sesDestination = {
+              ToAddresses: toAddresses
+            };
+
+            fs.writeFileSync('codeql-alert-message.html', html);
+            fs.writeFileSync('codeql-alert-message.txt', textLines.join('\n'));
+            fs.writeFileSync('ses-message.json', JSON.stringify(sesMessage, null, 2));
+            fs.writeFileSync('ses-destination.json', JSON.stringify(sesDestination, null, 2));
+
+            core.setOutput('count', String(highCriticalAlerts.length));
+
+      - name: Send High and Critical CodeQL alerts using AWS SES
+        if: steps.codeql-alerts.outputs.count != '0'
+        shell: bash
+        env:
+          ALERT_COUNT: ${{ steps.codeql-alerts.outputs.count }}
+        run: |
+          set -euo pipefail
+
+          echo "Sending CodeQL HTML email using AWS SES..."
+          echo "From: $SES_FROM_EMAIL"
+          echo "To: $SES_TO_EMAIL"
+          echo "Alert count: $ALERT_COUNT"
+
+          aws ses send-email \
+            --region "$AWS_REGION" \
+            --from "$SES_FROM_EMAIL" \
+            --destination file://ses-destination.json \
+            --message file://ses-message.json
+
+          echo "SES email sent successfully."
