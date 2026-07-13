@@ -47,36 +47,36 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: [python, javascript-typescript]
+        language: [javascript-typescript]
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Configure Python 3.9 for CodeQL
-        shell: bash
-        run: |
-          echo "Checking available Python versions..."
-          python3 --version || true
-          python3.9 --version || true
-          which python3 || true
-          which python3.9 || true
-
-          echo "Creating temporary python/python3 symlinks for this workflow..."
-          mkdir -p "$RUNNER_TEMP/python-bin"
-
-          ln -sf /bin/python3.9 "$RUNNER_TEMP/python-bin/python"
-          ln -sf /bin/python3.9 "$RUNNER_TEMP/python-bin/python3"
-
-          echo "$RUNNER_TEMP/python-bin" >> "$GITHUB_PATH"
-
-      - name: Verify Python used by workflow
-        shell: bash
-        run: |
-          which python
-          python --version
-          which python3
-          python3 --version
+      # - name: Configure Python 3.9 for CodeQL
+      #   shell: bash
+      #   run: |
+      #     echo "Checking available Python versions..."
+      #     python3 --version || true
+      #     python3.9 --version || true
+      #     which python3 || true
+      #     which python3.9 || true
+      #
+      #     echo "Creating temporary python/python3 symlinks for this workflow..."
+      #     mkdir -p "$RUNNER_TEMP/python-bin"
+      #
+      #     ln -sf /bin/python3.9 "$RUNNER_TEMP/python-bin/python"
+      #     ln -sf /bin/python3.9 "$RUNNER_TEMP/python-bin/python3"
+      #
+      #     echo "$RUNNER_TEMP/python-bin" >> "$GITHUB_PATH"
+      #
+      # - name: Verify Python used by workflow
+      #   shell: bash
+      #   run: |
+      #     which python
+      #     python --version
+      #     which python3
+      #     python3 --version
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
